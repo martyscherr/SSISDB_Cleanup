@@ -26,3 +26,9 @@ Job Steps execute the SQL in the following order:
 2. sp_SSISDB_prune_data.sql
 3. SSISDB_create_foreign_keys.sql
 4. SSISDB_sp_updatestats.sql
+
+SSISDB_table_purge_count.sql - Validates the counts of the Table and also validates that the Referential Integrity of the Foreign Key Constraints.
+
+Invalid_Foreign_Keys.sql - this SQL validates the Foreign Keys in the SSISDB database.  Just another way to validate that Referential Integrity has been maintained after the process has been completed.
+
+table_rowcount.sql - gets the Table Row Counts and Data Space used by table.  NOTE: Use this script to determine how many rows each table has and the size of each table.  You may find additional tables in the SSISDB Database that need to be adjust to this pruning process.
