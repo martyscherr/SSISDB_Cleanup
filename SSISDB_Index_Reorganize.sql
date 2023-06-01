@@ -1,5 +1,4 @@
 USE SSISDB
-/*
 
 SELECT 'ALTER INDEX ' + I.name + ' ON internal.' +  OBJECT_NAME(ips.object_id) + ' REORGANIZE;',
 OBJECT_NAME(ips.object_id) AS TableName
@@ -28,7 +27,9 @@ AND OBJECT_NAME(ips.object_id) IN
 ORDER BY ips.avg_fragmentation_in_percent DESC, ips.page_count DESC 
 ;
 
-*/
+
+
+/*
 
 ALTER INDEX PK_Execution_Parameter_value ON internal.execution_parameter_values REORGANIZE;
 
@@ -62,6 +63,6 @@ ALTER INDEX IX_EventMessageContext_Operation_id ON internal.event_message_contex
 
 ALTER INDEX PK_Operation_Messages ON internal.operation_messages REORGANIZE;
 
-
+*/
 
 

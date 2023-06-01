@@ -7,14 +7,23 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
+IF OBJECT_ID(N'dbo.sp_SSISDB_prune_data','P') IS NOT NULL
+BEGIN
+  DROP PROCEDURE [dbo].[sp_SSISDB_prune_data];
+END;
+
+GO
 
 CREATE PROCEDURE [dbo].[sp_SSISDB_prune_data]
+(
+  @GetDate DATETIME
+)
 AS
 
 /********************************************************************************************************************************
 Stored Procedure: sp_SSISDB_prune_data
 Author: Marty Scherr
-Date: 04/26/2023
+Date: 06/01/2023
 Description:  Prunes data from the following SSIS Tables
 Tables:
 internal.executable_statistics
@@ -31,291 +40,248 @@ NOTE: Please be cautious when using the code on your Production Servers.  You ma
 in each of the steps below depending on the performance of your server.
 
 ********************************************************************************************************************************/
-IF OBJECT_ID (N'dbo.SSISDB_prune_data_log', N'U') IS NULL /* does not exist */
-BEGIN /*  IF OBJECT_ID (N'dbo.SSISDB_prune_data_log', N'U') */
 
-CREATE TABLE dbo.SSISDB_prune_data_log
-(
-ID INT IDENTITY(1,1)
-,MSG VARCHAR(200)
-,ROW_COUNT INT DEFAULT 0
-,LOGDATE DATETIME DEFAULT GETDATE()
-);
+/* create SSISDB error and log table */
+
+IF OBJECT_ID (N'dbo.SSISDB_prune_data_error', N'U') IS NOT NULL /* does not exist */
+BEGIN /*  IF OBJECT_ID (N'dbo.SSISDB_prune_data_log', N'U') */
+	DROP TABLE dbo.SSISDB_prune_data_error;
+
+	CREATE TABLE dbo.SSISDB_prune_data_error(
+		UserName VARCHAR(100) NULL,
+		ErrorNumber int NULL,
+		ErrorSeverity int NULL,
+		ErrorState int NULL,
+		ErrorProcedure nvarchar(128) NULL,
+		ErrorMessage nvarchar(4000) NULL,
+		ErrorLine int NULL,
+		ErrorDateTime datetime NULL
+	) ON [PRIMARY];
+
+END; /*  IF OBJECT_ID (N'dbo.SSISDB_prune_data_error', N'U') */
+
+
+IF OBJECT_ID (N'dbo.SSISDB_prune_data_log', N'U') IS NOT NULL /* does not exist */
+BEGIN /*  IF OBJECT_ID (N'dbo.SSISDB_prune_data_log', N'U') */
+	DROP TABLE dbo.SSISDB_prune_data_log;
+
+	CREATE TABLE dbo.SSISDB_prune_data_log
+	(
+	ID INT IDENTITY(1,1)
+	,MSG VARCHAR(200)
+	,ROW_COUNT INT DEFAULT 0
+	,LOGDATE DATETIME DEFAULT GETDATE()
+	) ON [PRIMARY];
 
 END; /*  IF OBJECT_ID (N'dbo.SSISDB_prune_data_log', N'U') */
 
-TRUNCATE TABLE dbo.operations_temp;
 
-DECLARE @GETDATE DATETIME = GETDATE()-3
-DECLARE @int INT = 0
+DECLARE @int BIGINT = 0;
+DECLARE @max_operation_id BIGINT = 0;
 
 BEGIN TRY	
  
- BEGIN TRANSACTION
+ -- get max operation_id from internal.operations based on date criteria
 
-  INSERT INTO dbo.operations_temp
-  (
-      operation_id
-  )
-  SELECT operation_id
+  SELECT @max_operation_id = MAX(operation_id)
 	FROM internal.operations WITH (NOLOCK)
 	WHERE created_time < @GETDATE;
- 
- COMMIT TRANSACTION
 
 	-- get row count
 	SELECT @int = COUNT(1)
-	FROM dbo.operations_temp WITH (NOLOCK)
-
-  BEGIN TRANSACTION
-
-  INSERT INTO dbo.SSISDB_prune_data_log
-  (MSG
-  ,ROW_COUNT
-  )
-  SELECT 'inserting into dbo.operations_temp', @int
-
-  COMMIT TRANSACTION
+	FROM internal.executable_statistics WITH (NOLOCK)
+	WHERE execution_id <= @max_operation_id;
 
 -- executable_statistics
 
-  BEGIN TRANSACTION
+  BEGIN TRANSACTION;
 
   INSERT INTO dbo.SSISDB_prune_data_log
   (MSG
   ,ROW_COUNT
   )
-  SELECT 'deleting from internal.executable_statistics', @int
+  SELECT 'deleting from internal.executable_statistics', @int;
 
-  COMMIT TRANSACTION
+  COMMIT TRANSACTION;
 
 WHILE EXISTS
 (
 SELECT TOP (1) execution_id
 FROM internal.executable_statistics WITH (NOLOCK)
-WHERE execution_id IN
-(
-SELECT TOP (1) operation_id
-FROM dbo.operations_temp WITH (NOLOCK)
+WHERE execution_id <= @max_operation_id
 )
-)
-BEGIN -- WHILE
+BEGIN /* WHILE */
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 DELETE TOP (1000) 
 FROM internal.executable_statistics WITH (ROWLOCK)
-WHERE execution_id IN
-(
-SELECT TOP (1) operation_id
-FROM dbo.operations_temp WITH (NOLOCK)
-)
+WHERE execution_id <= @max_operation_id;
 
-SELECT @int = @@ROWCOUNT
+SELECT @int = @@ROWCOUNT;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
   INSERT INTO dbo.SSISDB_prune_data_log
   (MSG
   ,ROW_COUNT
   )
-  SELECT 'deleting from internal.executable_statistics', @int
+  SELECT 'deleting from internal.executable_statistics', @int;
 
-END -- WHILE
+END; /* WHILE */
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
   --get row count
   SELECT @int = COUNT(1)
   FROM internal.execution_parameter_values WITH (NOLOCK)
-  WHERE execution_id IN 
-  (
-	SELECT operation_id 
-	FROM dbo.operations_temp WITH (NOLOCK)
-  )
+  WHERE execution_id <= @max_operation_id;
 
   INSERT INTO dbo.SSISDB_prune_data_log
   (MSG
   ,ROW_COUNT
   )
-  SELECT 'deleting from internal.executable_statistics', @int
+  SELECT 'deleting from internal.executable_statistics', @int;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
 -- execution_parameter_values
 
   --get row count
   SELECT @int = COUNT(1)
   FROM internal.execution_parameter_values WITH (NOLOCK)
-  WHERE execution_id IN 
-  (
-	SELECT operation_id 
-	FROM dbo.operations_temp WITH (NOLOCK)
-  )
+  WHERE execution_id <= @max_operation_id;
 
-   BEGIN TRANSACTION
+   BEGIN TRANSACTION;
 
     INSERT INTO dbo.SSISDB_prune_data_log
    (MSG
    ,ROW_COUNT
    )
-   SELECT 'deleting from internal.execution_parameter_values', @int
+   SELECT 'deleting from internal.execution_parameter_values', @int;
 
-   COMMIT TRANSACTION
+   COMMIT TRANSACTION;
    
 WHILE EXISTS
 (
 SELECT TOP (1) execution_id 
 FROM internal.execution_parameter_values WITH (NOLOCK)
-WHERE execution_id IN 
-(
-SELECT TOP (1) operation_id 
-FROM dbo.operations_temp WITH (NOLOCK)
+WHERE execution_id <= @max_operation_id
 )
-)
-BEGIN -- WHILE
+BEGIN /* WHILE */
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 DELETE TOP(1000) FROM internal.execution_parameter_values	WITH (ROWLOCK)
-WHERE execution_id IN 
-(
-SELECT TOP (1) o.operation_id 
-FROM internal.operations o WITH (NOLOCK)
-WHERE o.created_time < @GETDATE
-)
+WHERE execution_id <= @max_operation_id;
 
 SELECT @int = @@ROWCOUNT;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 INSERT INTO dbo.SSISDB_prune_data_log
 (MSG
 ,ROW_COUNT
 )
-SELECT 'deleting from internal.executable_statistics', @int
+SELECT 'deleting from internal.executable_statistics', @int;
 
-COMMIT TRANSACTION	
+COMMIT TRANSACTION;
 
-END -- WHILE
+END; /* WHILE */
 
 -- event_message_context
 
 -- get row count
 SELECT @int = COUNT(1)
 FROM internal.event_message_context WITH (ROWLOCK)
-WHERE operation_id IN
-(
-SELECT operation_id
-FROM dbo.operations_temp WITH (NOLOCK)
-)
+WHERE operation_id <= @max_operation_id;
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 INSERT INTO dbo.SSISDB_prune_data_log
 (MSG
 ,ROW_COUNT)
-SELECT 'deleting from internal.event_message_context', @int
+SELECT 'deleting from internal.event_message_context', @int;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
 WHILE EXISTS
 (
 SELECT TOP(1) operation_id
 FROM internal.event_message_context WITH (ROWLOCK)
-WHERE operation_id IN
-(
-SELECT operation_id
-FROM dbo.operations_temp WITH (NOLOCK)
+WHERE operation_id <= @max_operation_id
 )
-) -- WHILE
 
-BEGIN -- WHILE
+BEGIN /* WHILE */
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 DELETE TOP(10000) 
 FROM internal.event_message_context WITH (ROWLOCK)
-WHERE operation_id IN
-(
-SELECT operation_id
-FROM dbo.operations_temp WITH (NOLOCK)
-)
+WHERE operation_id <= @max_operation_id;
 
 SELECT @int = @@ROWCOUNT;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 INSERT INTO dbo.SSISDB_prune_data_log
 (MSG
 ,ROW_COUNT)
 SELECT 'deleting from internal.event_message_context', @int
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
-END -- WHILE
+END /* WHILE */
 
 -- internal.event_messages
 
 -- get row count
 SELECT @int = COUNT(1) 
 FROM internal.event_messages WITH (ROWLOCK)
-WHERE operation_id IN
-(
-SELECT operation_id
-FROM dbo.operations_temp WITH (NOLOCK)
-)
+WHERE operation_id <= @max_operation_id;
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 INSERT INTO dbo.SSISDB_prune_data_log
 (MSG
 ,ROW_COUNT)
-SELECT 'deleting from internal.event_messages', @int
+SELECT 'deleting from internal.event_messages', @int;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
 WHILE EXISTS
 (
 SELECT TOP (1) operation_id 
 FROM internal.event_messages WITH (ROWLOCK)
-WHERE operation_id IN
-(
-SELECT operation_id
-FROM dbo.operations_temp WITH (NOLOCK)
-)
+WHERE operation_id <= @max_operation_id
 )
 
-BEGIN -- WHILE
+BEGIN /* WHILE */
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 DELETE TOP(1000) 
 FROM internal.event_messages WITH (ROWLOCK)
-WHERE operation_id IN
-(
-SELECT operation_id
-FROM dbo.operations_temp WITH (NOLOCK)
-)
+WHERE operation_id <= @max_operation_id;
 
 SET @int = @@ROWCOUNT;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 INSERT INTO dbo.SSISDB_prune_data_log
 (MSG
 ,ROW_COUNT)
-SELECT 'deleting from internal.event_messages', @int
+SELECT 'deleting from internal.event_messages', @int;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
-END -- WHILE
+END /* WHILE */
 
 -- operation_messages
 
@@ -324,68 +290,56 @@ BEGIN TRANSACTION
 -- get row count
 SELECT @int = COUNT(1)
 FROM internal.operation_messages WITH (ROWLOCK)
-WHERE operation_id IN
-(
-SELECT operation_id
-FROM dbo.operation_messages_temp
-)
+WHERE operation_id <= @max_operation_id;
 
 INSERT INTO dbo.SSISDB_prune_data_log
 (MSG
 ,ROW_COUNT
 )
-SELECT 'deleting from internal.operation_messages', @int
+SELECT 'deleting from internal.operation_messages', @int;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
 WHILE EXISTS
 (
 SELECT TOP (1) operation_id 
 FROM internal.operation_messages WITH (ROWLOCK)
-WHERE operation_id IN
-(
-SELECT operation_id
-FROM dbo.operation_messages_temp
+WHERE operation_id <= @max_operation_id
 )
-)
-BEGIN -- WHILE
+BEGIN /* WHILE */
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 DELETE TOP (1000)
 FROM internal.operation_messages WITH (ROWLOCK)
-WHERE operation_id IN
-(
-SELECT operation_id
-FROM dbo.operation_messages_temp
-);
+WHERE operation_id <= @max_operation_id;
 
 SET @int = @@ROWCOUNT;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 INSERT INTO dbo.SSISDB_prune_data_log
 (MSG
 ,ROW_COUNT
 )
-SELECT 'deleting from internal.operation_messages', @int
+SELECT 'deleting from internal.operation_messages', @int;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
-END -- WHILE
+END /* WHILE */
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 SET @int=0;
 INSERT INTO dbo.SSISDB_prune_data_log
 (MSG
 ,ROW_COUNT
 )
-SELECT 'deleting from internal.operation_permissions', @int
+SELECT 'deleting from internal.operation_permissions', @int;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
 -- operation_permissions
 
@@ -393,63 +347,58 @@ WHILE EXISTS
 ( 
 SELECT TOP (1) object_id
 FROM internal.operation_permissions WITH (NOLOCK)
-WHERE object_id IN
-(
-SELECT operation_id
-FROM dbo.operations_temp WITH (NOLOCK)
-)
+WHERE object_id <= @max_operation_id
 ) 
 
-BEGIN -- while
+BEGIN /* WHILE */
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 DELETE TOP (100)
 FROM internal.operation_permissions WITH (ROWLOCK)
-WHERE object_id IN
-(
-SELECT operation_id
-FROM dbo.operations_temp WITH (NOLOCK)
-)
+WHERE object_id <= @max_operation_id;
 
-SELECT @INT = @@ROWCOUNT
+SELECT @INT = @@ROWCOUNT;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 INSERT INTO dbo.SSISDB_prune_data_log
 (MSG
 ,ROW_COUNT
 )
-SELECT 'deleting from internal.operation_permissions', @int
+SELECT 'deleting from internal.operation_permissions', @int;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
-END -- while
+END /* WHILE */
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 SELECT @int= 0;
 INSERT INTO dbo.SSISDB_prune_data_log
 (MSG
 ,ROW_COUNT
 )
-SELECT 'deleting from internal.operation_permissions', @int
+SELECT 'deleting from internal.operation_permissions', @int;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
 -- operations
 
-SELECT @int= 0;
+-- get row count
+SELECT @int = COUNT(1)
+FROM internal.operations WITH (NOLOCK)
+WHERE operation_id <= @max_operation_id;
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 INSERT INTO dbo.SSISDB_prune_data_log
 (MSG
 ,ROW_COUNT
 )
-SELECT 'deleting from internal.operations', @int
+SELECT 'deleting from internal.operations', @int;
 
 COMMIT TRANSACTION
 
@@ -457,35 +406,35 @@ WHILE EXISTS
 (
 SELECT TOP 1 operation_id
 FROM internal.operations WITH (NOLOCK)
-WHERE created_time < @GETDATE
+WHERE operation_id <= @max_operation_id
 )
-BEGIN -- WHILE
+BEGIN /* WHILE */
 
 BEGIN TRANSACTION
 
 DELETE TOP (100)
 FROM internal.operations WITH (ROWLOCK)
-WHERE created_time < @GETDATE
+WHERE operation_id <= @max_operation_id;
 
 SELECT @int= @@ROWCOUNT;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
-BEGIN TRANSACTION
+BEGIN TRANSACTION;
 
 INSERT INTO dbo.SSISDB_prune_data_log
 (MSG
 ,ROW_COUNT
 )
-SELECT 'deleting from internal.operations', @int
+SELECT 'deleting from internal.operations', @int;
 
-COMMIT TRANSACTION
+COMMIT TRANSACTION;
 
-END -- WHILE
+END; /* WHILE */
 
 END TRY
 
-BEGIN CATCH
+BEGIN CATCH;
 
 	DECLARE @ErrorID        INT
 	DECLARE @UserName       VARCHAR(100)
@@ -500,26 +449,26 @@ BEGIN CATCH
 	SELECT
 	@UserName = SUSER_NAME()
 	,@ErrorNumber = ERROR_NUMBER()
+	,@ErrorSeverity = ERROR_SEVERITY()
 	,@ErrorState = ERROR_STATE()
-	,@ErrorSeverity = ERROR_STATE()
-	,@ErrorLine = ERROR_LINE()
 	,@ErrorProcedure = ERROR_PROCEDURE()
 	,@ErrorMessage = ERROR_MESSAGE()
+	,@ErrorLine = ERROR_LINE()
 	,@ErrorDateTime = GETDATE();
 
 	ROLLBACK TRANSACTION;
 
-    INSERT INTO dbo.SSISDB_Error
+    INSERT INTO dbo.SSISDB_prune_data_error
     VALUES
   (@UserName,
    @ErrorNumber,
-   @ErrorState,
    @ErrorSeverity,
-   @ErrorLine,
+   @ErrorState,
    @ErrorProcedure,
    @ErrorMessage,
+   @ErrorLine,
    @ErrorDateTime);
    
    RAISERROR (@ErrorMessage, @ErrorSeverity, @ErrorState);
-END CATCH
+END CATCH;
 
