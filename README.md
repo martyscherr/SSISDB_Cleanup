@@ -9,6 +9,8 @@ I have included some SQL queries in this solution that will help you track your 
 Files Included:
 SSISDB_Database_Digram.png - ScreenShot of SSISDB Database Tables with the Foreign Key relationships
 
+SSISDB_foreign_keys.sql - generates the Foreign Key sql statements needed to drop / create the Foreign Keys
+
 SSISDB_drop_foreign_keys.sql - Foreign Keys that I drop while executing the pruning process to improve the performance.  The reason I do this is that many of the Foreign Keys in the SSISDB database use a CASCADE DELETE option which tends to be slow in performance.   Make sure to create the foreign keys once the process is completed.  
 
 sp_SSISDB_prune_data.sql - Stored Procedure that executes the data pruning process
